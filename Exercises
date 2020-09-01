@@ -1,0 +1,148 @@
+Example 1
+
+Details - Duration 40 minutes
+Data set URL 874
+Choose language of your choice Python or Scala
+Data is available in HDFS file system under /public/crime/csv
+You can check properties of files using hadoop fs -ls -h /public/crime/csv
+Structure of data (ID,Case Number,Date,Block,IUCR,Primary Type,Description,Location Description,Arrest,Domestic,Beat,District,Ward,
+Community Area,FBI Code,X Coordinate,Y Coordinate,Year,Updated On,Latitude,Longitude,Location)
+File format - text file
+Delimiter - “,”
+Get monthly count of primary crime type, sorted by month in ascending and number of crimes per type in descending order
+Store the result in HDFS path /user/<YOUR_USER_ID>/solutions/solution01/crimes_by_type_by_month
+Output File Format: TEXT
+Output Columns: Month in YYYYMM format, crime count, crime type
+Output Delimiter: \t (tab delimited)
+Output Compression: gzip
+
+======================
+from pyspark.sql import SQLContext
+def fetchDateAndType(record):
+	recItems = record.split(",")
+	inputdate = recItems[2]
+	datetime = inputdate.split(" ")
+	date = datetime[0].split("/")
+	crimeDate = int(date[2]+date[0])
+	crimeType = str(recItems[5])
+	return crimeDate,crimeType
+
+spark=SparkSession(sc)
+sqlContext = SQLContext(sc)
+crimeData = sc.textFile("/public/crime/csv")
+header = crimeData.first()
+crimeDataWOHeader = crimeData.filter(lambda x : x != header)
+
+crimeDF = crimeDataWOHeader.map(lambda rec: fetchDateAndType(rec)).toDF(["Crime_date","Crime_type"])
+
+crimeDF.registerTempTable("crime_data")
+
+crimeResults = sqlContext.sql("SELECT Crime_date,count(1) as Count, Crime_type from crime_data group by Crime_date,Crime_type order by Crime_date,Count desc ")
+
+x = crimeResults.rdd.map(lambda rec : "\t".join([str(x) for x in rec])).coalesce(1)saveAsTextFile("/user/udinakar/solutions/sol01py/crimes_by_type_by_month",compressionCodecClass="org.apache.hadoop.io.compress.GzipCodec")
+
+======================
+=========================
+Exercise 3:
+Details - Duration 15 to 20 minutes
+Data is available in HDFS file system under /public/crime/csv
+Structure of data (ID,Case Number,Date,Block,IUCR,Primary Type,Description,Location Description,Arrest,Domestic,Beat,District,Ward,Community Area,FBI Code,X Coordinate,Y Coordinate,Year,Updated On,Latitude,Longitude,Location)
+File format - text file
+Delimiter - “,” (use regex while splitting split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", -1), as there are some fields with comma and enclosed using double quotes.
+Get top 3 crime types based on number of incidents in RESIDENCE area using “Location Description”
+Store the result in HDFS path /user/<YOUR_USER_ID>/solutions/solution03/RESIDENCE_AREA_CRIMINAL_TYPE_DATA
+Output Fields: Crime Type, Number of Incidents
+Output File Format: JSON
+Output Delimiter: N/A
+Output Compression: No
+
+from pyspark.sql import SparkSession
+from pyspark import SparkContext 
+
+sc = SparkContext.getOrCreate()
+spark = SparkSession(sc)
+
+data = sc.textFile('hdfs:///public/crime/csv')
+
+Headerdata = data.first()
+
+NoHeaderData = data.filter(lambda rec: rec != Headerdata)
+
+def splitting(rec):
+    lines = rec.split(',')
+    address = lines[7]
+    data = lines[6]
+    return(data,address)
+
+address_data = NoHeaderData.map(lambda rec: splitting(rec)).toDF(['TYPE','ADDRESS'])
+
+address_data.registerTempTable('CRIME_COUNT')
+
+from pyspark.sql import SQLContext
+sqlContext = SQLContext(sc)
+table = sqlContext.sql('select ADDRESS,TYPE,count(*) as c from CRIME_COUNT where ADDRESS LIKE "RESIDENCE" group by ADDRESS,TYPE order by c desc limit 3').coalesce(1)
+
+table.write.JSON('/user/user_id/solutions/solution03/RESIDENCE_AREA_CRIMINAL_TYPE_DATA')
+
+-----------------------
+Using Spark DATAFRAME:
+
+from pyspark.sql import Row,SparkSession
+from pyspark import SparkContext 
+from pyspark.sql.window import Window
+from pyspark.sql.functions import rank, col
+from operator import add
+
+sc = SparkContext.getOrCreate()
+spark = SparkSession(sc)
+
+data = sc.textFile('hdfs:///public/crime/csv')
+
+Headerdata = data.first()
+
+NoHeaderData = data.filter(lambda rec: rec != Headerdata)
+
+address_data = NoHeaderData.map(lambda rec: ((Row(types=rec.split(',')[6],address=rec.split(',')[7])),1))
+
+reduceddata = address_data.reduceByKey(add).toDF(['ADDRESS','COUNT'])
+r1 = reduceddata.select("ADDRESS.address","ADDRESS.types","COUNT")
+finaldata = r1.filter(r1.address == "RESIDENCE")
+
+window = Window.partitionBy(finaldata['address']).orderBy(finaldata['COUNT'].desc())
+finaldata.select('*', rank().over(window).alias('rank')) \
+  .filter(col('rank') <= 3) \
+  .show()
+------------------------
+
+==================================================================================================
+EXAMPLE 5:
+
+Details - Duration 10 minutes
+Data is available in local file system under /data/nyse (ls -ltr /data/nyse)
+Fields (stockticker:string, transactiondate:string, openprice:float, highprice:float, lowprice:float, closeprice:float, volume:bigint)
+Convert file format to parquet
+Save it /user/<YOUR_USER_ID>/nyse_parquet
+
+from pyspark.sql import Row,SparkContext
+
+nyseRaw = sc.textFile("/user/root/nyse/nyse*")
+
+nyse_DF = nyseRaw.
+map(lambda o:
+Row(stockticker = str(o.split(",")[0]),
+transactiondate = str(o.split(",")[1]),
+openprice = float(o.split(",")[2]),
+highprice = float(o.split(",")[3]),
+lowprice = float(o.split(",")[4]),
+closeprice = float(o.split(",")[5]),
+volume = int(o.split(",")[6])
+)
+).toDF()
+
+nyseDF = nyse_DF.select(“stockticker”, “transactiondate”, “openprice”, “highprice”, “lowprice”, “closeprice”, “volume”)
+
+nyseDF.coalesce(1).write.
+format(“parquet”).
+save("/user/root/tp4")
+
+sqlContext.read.load("/user/root/tp4",“parquet”).show()
